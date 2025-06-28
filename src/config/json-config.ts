@@ -3,5 +3,6 @@ config();
 
 export default {
     JSON_TOKEN : process.env.JSON_TOKEN as string,
-    SALT_ROUNDS : process.env.SALT_ROUNDS as string
+    SALT_ROUNDS : process.env.SALT_ROUNDS as string,
+    JWT_EXPIRY : process.env.JWT_EXPIRY 
 }
