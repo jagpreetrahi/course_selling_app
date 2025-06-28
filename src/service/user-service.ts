@@ -1,18 +1,21 @@
 import UserRepository from "../repository/user-repostiory";
 import { StatusCodes } from "http-status-codes";
 import { AppError } from "../utils/error/app-error";
-import * as jwt from "jsonwebtoken";
 import config from './../config';
 import {z} from 'zod';
-import * as bcrypt from 'bcrypt'
+import {OAuth2Client} from  'google-auth-library'
+import {createToken  , verifyToken ,  hashPassword, comparePassword} from './../utils/common/auth'
+import * as jwt from "jsonwebtoken";
 
 const user_repository  = new UserRepository();
+const client = new OAuth2Client(config.GoogleClient.CLIENT_ID);
+
 // signUpValidation 
 const signUpValidation = z.object({
      username: z.string().email(),
      password : z.string(),
-     firstName : z.string(),
-     lastName : z.string(),
+     firstName: z.string(),
+     lastName: z.string(),
 })
 
 type signUpInput = z.infer<typeof signUpValidation>
@@ -28,18 +31,17 @@ const signUpUser = async (data : signUpInput) => {
         if(user_found){
             return "User is already exits";
         }
-
         // hash the password
-        const hashPassword = await bcrypt.hash(data.password , Number(config.JsonConfig.SALT_ROUNDS)) 
+        const hashedPass = await hashPassword(data.password) 
         // create a new user
         const user = await user_repository.create({
             username : data.username,
-            password : hashPassword,
-            firstName : data.firstName,
-            lastName : data.lastName
+            password : hashedPass,
+            firstName: data.firstName,
+            lastName: data.lastName
         });
         //  generate a token for user
-        const token = jwt.sign({user_id : user.id}, config.JsonConfig.JSON_TOKEN , {algorithm : "RS256"})
+        const token = createToken({ user_id: user.id,username: user.username})
         return {token};
     } catch (error) {
         throw new AppError("Cannot create a new user" , StatusCodes.INTERNAL_SERVER_ERROR)
@@ -65,21 +67,82 @@ const signInUser = async (data : signInInput) => {
             return "User does not exists"
         }
         // compare the password
-        const comparePassword = bcrypt.compare(data.password , isUserExists.password);
-        if(!comparePassword){
+        const comparePass = comparePassword(data.password , isUserExists.password);
+        if(!comparePass){
             return "invalid password"
         }
         //  generate a token for user
-        const token = jwt.sign({user_id : isUserExists.id}, config.JsonConfig.JSON_TOKEN , {algorithm : "RS256"})
+        const token = createToken({
+            user_id: isUserExists.id,
+            username: isUserExists.username
+        })
         return {token};
      } catch (error) {
          throw new AppError("Cannot create a new user" , StatusCodes.INTERNAL_SERVER_ERROR)
      }
 }
 
+const googleSignUp = async(idToken : string) => {
+
+    try {
+        const ticket = await client.verifyIdToken({idToken , audience : config.GoogleClient.CLIENT_ID});
+
+        const payload = ticket.getPayload();
+
+        if(!payload?.email){
+            throw new AppError("Invalid google token" , StatusCodes.BAD_REQUEST)
+        }
+
+        // check whether the user already exists or not 
+        const existingUser = await user_repository.get({username : payload.email});
+
+        if(existingUser){
+            return "user is already existing"
+        }
+
+        const newUserByGoogle = await user_repository.create({
+            username : payload.email,
+            firstName : payload.given_name,
+            lastName : payload.family_name,
+            profile : payload.picture,
+            authProvider : "google"
+        })
+
+        const token = createToken({user_id: newUserByGoogle.id, username: newUserByGoogle.username})
+        return {token};
+
+        
+    } catch (error) {
+        console.log("Something went wrong while creatig a user by google auth " , error);
+        throw error;
+    }
+
+}
+
+const authenticatedUser = async(token: string)=> {
+
+    try {
+
+        if(!token){
+             throw new AppError("Token is missing" , StatusCodes.BAD_REQUEST)
+        }
+        const response = verifyToken(token);
+        if(typeof response === 'object' && 'user_id' in response){
+           const user = await user_repository.get(response.user_id)
+           if(!user){
+                throw new AppError("No user found" , StatusCodes.NOT_FOUND)
+            }
+           return user;
+        }
+    } catch (error) {
+         throw new AppError("Something went Wrong" , StatusCodes.INTERNAL_SERVER_ERROR)
+    }
+}
 
 
 export default {
     signInUser,
-    signUpUser
+    signUpUser,
+    googleSignUp,
+    authenticatedUser
 }
