@@ -20,4 +20,6 @@ model User{
    password String
    firstName String
    lastName String
+   authProvider String?
+   profilePic String?
 }
